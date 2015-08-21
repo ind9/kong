@@ -56,7 +56,7 @@ local function get_backend_url(api)
   local len = string.len(result)
   if string.sub(result, len, len) == "/" then
     -- Remove one slash to avoid having a double slash
-    -- Because ngx.var.request_uri always starts with a slash
+    -- Because ngx.var.uri always starts with a slash
     result = string.sub(result, 0, len - 1)
   end
 
@@ -77,20 +77,20 @@ local function get_host_from_url(val)
 end
 
 -- Find an API from a request made to nginx. Either from one of the Host or X-Host-Override headers
--- matching the API's `public_dns`, either from the `request_uri` matching the API's `path`.
+-- matching the API's `public_dns`, either from the `uri` matching the API's `path`.
 --
--- To perform this, we need to query _ALL_ APIs in memory. It is the only way to compare the `request_uri`
+-- To perform this, we need to query _ALL_ APIs in memory. It is the only way to compare the `uri`
 -- as a regex to the values set in DB, as well as matching wildcard dns.
 -- We keep APIs in the database cache for a longer time than usual.
 -- @see https://github.com/Mashape/kong/issues/15 for an improvement on this.
 --
--- @param  `request_uri` The URI for this request.
+-- @param  `uri` The URI for this request.
 -- @return `err`         Any error encountered during the retrieval.
 -- @return `api`         The retrieved API, if any.
 -- @return `hosts`       The list of headers values found in Host and X-Host-Override.
--- @return `request_uri` The URI for this request.
+-- @return `uri` The URI for this request.
 -- @return `by_path`     If the API was retrieved by path, will be true, false if by Host.
-local function find_api(request_uri)
+local function find_api(uri)
   local retrieved_api
 
   -- Retrieve all APIs
@@ -138,22 +138,22 @@ local function find_api(request_uri)
   --
   -- To do so, we have to compare entire URI segments (delimited by "/").
   -- Comparing by entire segment allows us to avoid edge-cases such as:
-  -- request_uri = /mockbin-with-pattern/xyz
+  -- uri = /mockbin-with-pattern/xyz
   -- api.path regex = ^/mockbin
   -- ^ This would wrongfully match. Wether:
   -- api.path regex = ^/mockbin/
   -- ^ This does not match.
 
   -- Because we need to compare by entire URI segments, all URIs need to have a trailing slash, otherwise:
-  -- request_uri = /mockbin
+  -- uri = /mockbin
   -- api.path regex = ^/mockbin/
   -- ^ This would not match.
-  if not stringy.endswith(request_uri, "/") then
-    request_uri = request_uri.."/"
+  if not stringy.endswith(uri, "/") then
+    uri = uri.."/"
   end
 
   for path, api in pairs(apis_dics.by_path) do
-    local m, err = ngx.re.match(request_uri, "^"..path.."/")
+    local m, err = ngx.re.match(uri, "^"..path.."/")
     if err then
       ngx.log(ngx.ERR, "[resolver] error matching requested path: "..err)
     elseif m then
@@ -168,15 +168,15 @@ end
 
 -- Retrieve the API from the Host that has been requested
 function _M.execute(conf)
-  local request_uri = ngx.var.request_uri
-  local err, api, hosts, by_path = find_api(request_uri)
+  local uri = ngx.var.uri
+  local err, api, hosts, strip_path_pattern = find_api(uri)
   if err then
     return responses.send_HTTP_INTERNAL_SERVER_ERROR(err)
   elseif not api then
     return responses.send_HTTP_NOT_FOUND {
       message = "API not found with these values",
       public_dns = hosts,
-      path = request_uri
+      path = uri
     }
   end
 
@@ -186,14 +186,14 @@ function _M.execute(conf)
     -- or replace `/path/foo` with `/foo`, and then do not prefix with `/`.
     -- Handles pattern-specific characters if any.
     local escaped_path = string.gsub(api.path, "[%(%)%.%%%+%-%*%?%[%]%^%$]", function(c) return "%"..c end)
-    request_uri = string.gsub(request_uri, escaped_path, "", 1)
-    if string.sub(request_uri, 0, 1) ~= "/" then
-      request_uri = "/"..request_uri
+    uri = string.gsub(uri, escaped_path, "", 1)
+    if string.sub(uri, 0, 1) ~= "/" then
+      uri = "/"..uri
     end
   end
 
   -- Setting the backend URL for the proxy_pass directive
-  ngx.var.backend_url = get_backend_url(api)..request_uri
+  ngx.var.backend_url = get_backend_url(api)..uri
   if api.preserve_host then
     ngx.var.backend_host = ngx.req.get_headers()["host"]
   else
