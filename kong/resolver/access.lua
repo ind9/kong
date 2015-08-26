@@ -133,6 +133,7 @@ local function find_api(request_uri)
   if retrieved_api then
     return nil, retrieved_api, all_hosts
   end
+end
 
 -- To do so, we have to compare entire URI segments (delimited by "/").
 -- Comparing by entire segment allows us to avoid edge-cases such as:
